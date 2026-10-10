@@ -4,7 +4,8 @@ Necesita la red de audio de build_audio.py. Uso, en el Textport (Alt+T):
 
 exec(open(project.folder + '/../scripts/build/build_caleidoscopio.py', encoding='utf-8').read(), globals())
 
-Se puede volver a ejecutar: reemplaza la escena anterior.
+Se puede volver a ejecutar: reemplaza la escena anterior. Hay que hacerlo
+después de editar el shader o el script de relojes para que tomen el cambio.
 """
 
 import td
@@ -52,13 +53,14 @@ def _replace(container, op_type, name):
 
 
 def _file_dat(container, name, path):
-	"""Crea un Text DAT que refleja un archivo del repo."""
+	"""Crea un Text DAT con el contenido de un archivo del repo.
+
+	No usa Sync to File: con esa opción TouchDesigner puede escribir de
+	vuelta y pisar el archivo del repo con una copia vieja.
+	"""
 	dat = container.create(textDAT, name)
-	_set(dat, 'file', path)
-	_set(dat, 'syncfile', True)
-	if not dat.text:
-		with open(project.folder + '/' + path, encoding='utf-8-sig') as source:
-			dat.text = source.read()
+	with open(project.folder + '/' + path, encoding='utf-8-sig') as source:
+		dat.text = source.read()
 	return dat
 
 
