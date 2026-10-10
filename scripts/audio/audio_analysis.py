@@ -32,7 +32,7 @@ NOISE_FLOOR = 0.01
 
 # Detección de beat: hay golpe cuando la energía del bombo sube de golpe
 # bastante más que en los frames recientes.
-KICK_RANGE = (40.0, 150.0)
+KICK_RANGE = (60.0, 250.0)
 
 # El bombo se mide contra su propio pico reciente. KICK_PEAK_DECAY olvida ese
 # pico en pocos segundos, para que un ruido fuerte o un cambio de volumen no
