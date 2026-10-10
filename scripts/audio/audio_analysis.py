@@ -1,8 +1,9 @@
 """Callbacks del Script CHOP de análisis de audio.
 
 Recibe audio crudo y entrega un solo sample con los canales low, mid, high
-y level, cada uno normalizado al rango 0-1, más beat y beat_count: beat
-salta a 1 en cada golpe de bombo y se apaga, y beat_count cuenta los golpes.
+y level, cada uno normalizado al rango 0-1, más kick, beat y beat_count:
+kick es la energía del bombo contra su pico reciente, beat salta a 1 en cada
+golpe de bombo y se apaga, y beat_count cuenta los golpes.
 """
 
 from collections import deque
@@ -29,21 +30,29 @@ RELEASE = 0.12
 PEAK_DECAY = 0.999
 NOISE_FLOOR = 0.01
 
-# Detección de beat: hay golpe cuando la energía del bombo sube de un frame
-# al siguiente bastante más que en los frames recientes.
+# Detección de beat: hay golpe cuando la energía del bombo sube de golpe
+# bastante más que en los frames recientes.
 KICK_RANGE = (40.0, 150.0)
 
-# El bombo se mide contra su pico reciente, pero nunca contra menos que esta
-# proporción del nivel general: así el ruido sin graves no cuenta como golpe.
-KICK_MIN_SHARE = 1.0
+# El bombo se mide contra su propio pico reciente. KICK_PEAK_DECAY olvida ese
+# pico en pocos segundos, para que un ruido fuerte o un cambio de volumen no
+# dejen sorda la detección. El pico nunca baja de KICK_MIN_SHARE veces el
+# nivel general: así el ruido sin graves no cuenta como golpe.
+KICK_PEAK_DECAY = 0.99
+KICK_MIN_SHARE = 0.5
 
-# Frames recientes contra los que se compara la subida.
+# Nivel general mínimo para aceptar golpes; por debajo se considera silencio.
+BEAT_MIN_LEVEL = 0.1 * NOISE_FLOOR
+
+# La subida se mide contra el valor más bajo de los últimos KICK_LOOKBACK
+# frames y se compara con las subidas de los últimos BEAT_HISTORY frames.
+KICK_LOOKBACK = 3
 BEAT_HISTORY = 45
 
 # Cuántas desviaciones sobre el promedio debe superar la subida, y la subida
 # mínima aceptada. Bajar estos valores detecta más golpes.
 BEAT_SENSITIVITY = 2.0
-BEAT_MIN_RISE = 0.15
+BEAT_MIN_RISE = 0.3
 
 # Segundos mínimos entre dos golpes y caída por frame del canal beat.
 BEAT_MIN_INTERVAL = 0.25
@@ -57,6 +66,7 @@ _state = {
 	'peaks': {},
 	'values': {},
 	'kick': 0.0,
+	'kicks': deque([0.0], maxlen=KICK_LOOKBACK),
 	'rises': deque(maxlen=BEAT_HISTORY),
 	'since_beat': BEAT_MIN_INTERVAL,
 	'beat': 0.0,
@@ -92,10 +102,11 @@ def _measure(sample_rate):
 
 def _detect_beat(kick, level, elapsed):
 	"""Actualiza beat y beat_count con la energía del bombo de este frame."""
-	peak = max(kick, _state['peaks'].get('kick', 0.0) * PEAK_DECAY, KICK_MIN_SHARE * level, NOISE_FLOOR)
+	peak = max(kick, _state['peaks'].get('kick', 0.0) * KICK_PEAK_DECAY, KICK_MIN_SHARE * level, 1e-9)
 	_state['peaks']['kick'] = peak
 	kick /= peak
-	rise = max(kick - _state['kick'], 0.0)
+	rise = max(kick - min(_state['kicks']), 0.0)
+	_state['kicks'].append(kick)
 	_state['kick'] = kick
 
 	rises = _state['rises']
@@ -106,7 +117,8 @@ def _detect_beat(kick, level, elapsed):
 
 	_state['since_beat'] += elapsed
 	_state['beat'] *= BEAT_DECAY
-	if rise > threshold and _state['since_beat'] >= BEAT_MIN_INTERVAL:
+	audible = level >= BEAT_MIN_LEVEL
+	if audible and rise > threshold and _state['since_beat'] >= BEAT_MIN_INTERVAL:
 		_state['since_beat'] = 0.0
 		_state['beat'] = 1.0
 		_state['beat_count'] += 1
@@ -152,6 +164,7 @@ def onCook(scriptOp):
 	for name in CHANNELS:
 		chan = scriptOp.appendChan(name)
 		chan[0] = _smooth(name, _normalize(name, raw[name]))
+	scriptOp.appendChan('kick')[0] = _state['kick']
 	scriptOp.appendChan('beat')[0] = _state['beat']
 	scriptOp.appendChan('beat_count')[0] = _state['beat_count']
 	return
