@@ -3,13 +3,19 @@
 
 uniform vec4 uAudio; // low, mid, high, level en el rango 0-1
 uniform vec4 uClock; // seconds, low_phase, mid_phase, sin uso
+uniform vec4 uBeat;  // beat (1 en el golpe y se apaga), beat_count
 
 out vec4 fragColor;
 
 const float TAU = 6.28318530718;
 
-// Cantidad de gajos del caleidoscopio.
-const float SEGMENTS = 6.0;
+// Los gajos del caleidoscopio cambian cada BEATS_PER_SHAPE golpes y recorren
+// SEGMENTS_MIN, +2, +4 y vuelta a empezar.
+const float SEGMENTS_MIN = 4.0;
+const float BEATS_PER_SHAPE = 8.0;
+
+// Cuánto se corre la paleta de color en cada golpe.
+const float BEAT_HUE_STEP = 0.13;
 
 // Estelas: cuánto sobrevive el frame anterior y cuánto se aleja del centro.
 const float TRAIL_DECAY = 0.88;
@@ -79,35 +85,43 @@ void main()
 	float seconds = uClock.x;
 	float lowPhase = uClock.y;
 	float midPhase = uClock.z;
+	float beat = uBeat.x;
+	float beatCount = uBeat.y;
+
+	// Arranca en seis gajos y cambia de forma cada pocos golpes.
+	float shape = mod(floor(beatCount / BEATS_PER_SHAPE) + 1.0, 3.0);
+	float segments = SEGMENTS_MIN + 2.0 * shape;
+	float hue = BEAT_HUE_STEP * beatCount;
 
 	vec2 resolution = uTDOutputInfo.res.zw;
 	vec2 centered = vUV.st - 0.5;
 	vec2 p = centered * vec2(resolution.x / resolution.y, 1.0);
 
-	// Los graves acercan la imagen y todo gira despacio.
-	p *= 1.0 - 0.22 * low;
+	// Los graves acercan la imagen, cada golpe da un empujón y todo gira despacio.
+	p *= 1.0 - 0.22 * low - 0.12 * beat;
 	p = rotate(0.07 * seconds + 0.25 * midPhase) * p;
 	float radius = length(p);
-	vec2 folded = kaleido(p, SEGMENTS);
+	vec2 folded = kaleido(p, segments);
 
 	// Nebulosa: ruido deformado por más ruido; los medios aumentan la deformación.
 	vec2 q = folded * 2.6 - vec2(lowPhase, 0.0);
 	vec2 warp = vec2(fbm(q + 0.3 * midPhase), fbm(q + 5.2 - 0.3 * midPhase));
 	float cloud = fbm(q + (1.2 + 2.2 * mid) * warp);
-	vec3 color = palette(cloud + 0.35 * radius + 0.04 * seconds + 0.25 * mid);
-	color *= smoothstep(0.25, 0.8, cloud) * (0.3 + 1.1 * level);
+	vec3 color = palette(hue + cloud + 0.35 * radius + 0.04 * seconds + 0.25 * mid);
+	color *= smoothstep(0.25, 0.8, cloud) * (0.3 + 1.1 * level + 0.6 * beat);
 
 	// Anillos que salen del centro al ritmo de los graves.
 	float rings = 0.5 + 0.5 * cos(TAU * (3.5 * radius - 1.5 * lowPhase));
-	color += palette(0.5 + radius - 0.2 * lowPhase) * pow(rings, 8.0) * low;
+	color += palette(hue + 0.5 + radius - 0.2 * lowPhase) * pow(rings, 8.0) * low;
 
 	// Chispas que parpadean con los agudos.
 	vec2 spark = floor(folded * 42.0);
 	float flicker = hash21(spark + floor(12.0 * seconds));
 	color += vec3(step(1.0 - 0.05 * high, flicker)) * high;
 
-	// Núcleo que se enciende con los graves.
-	color += palette(0.05 * seconds) * 0.06 * low * low / (radius * radius + 0.02);
+	// Núcleo que se enciende con los graves y destella en cada golpe.
+	float core = 0.06 * low * low + 0.05 * beat;
+	color += palette(hue + 0.05 * seconds) * core / (radius * radius + 0.02);
 
 	color *= smoothstep(1.1, 0.25, radius);
 

@@ -117,13 +117,14 @@ def _build_shader(scene, audio_in, clock):
 	_set(feedback, 'top', shader.name)
 
 	try:
-		shader.par.vec0name.sequence.numBlocks = 2
+		shader.par.vec0name.sequence.numBlocks = 3
 	except Exception as error:
-		_warn('no se pudo agregar el segundo uniform: {}'.format(error))
+		_warn('no se pudieron agregar los uniforms: {}'.format(error))
 	audio = "op('{}')['{{}}']".format(audio_in.name)
 	_uniform(shader, 0, 'uAudio', [audio.format(name) for name in ('low', 'mid', 'high', 'level')])
 	clock_value = "op('{}')['{{}}']".format(clock.name)
 	_uniform(shader, 1, 'uClock', [clock_value.format(name) for name in ('seconds', 'low_phase', 'mid_phase')])
+	_uniform(shader, 2, 'uBeat', [audio.format(name) for name in ('beat', 'beat_count')])
 	return shader
 
 
