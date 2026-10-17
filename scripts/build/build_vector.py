@@ -110,8 +110,11 @@ def _build_scope(scene, audio):
 	_set(source, 'top', '../{}/out1'.format(SOURCE_SCENE))
 	_resolution(source, SOURCE_RESOLUTION)
 
-	scope = scene.loadTox(app.installFolder + '/' + SCOPE_TOX)
-	scope.name = 'scope'
+	# El .tox de la Palette envuelve el vectorscopio en un Base COMP con su
+	# ícono; se copia el componente de adentro y se descarta el envoltorio.
+	wrapper = scene.loadTox(app.installFolder + '/' + SCOPE_TOX)
+	scope = scene.copy(wrapper.op('vectorScope'), name='scope')
+	wrapper.destroy()
 	scope.nodeX, scope.nodeY = 200, -300
 	scope.inputConnectors[0].connect(source)
 	_set(scope, 'Resolutionw', RESOLUTION[0])
@@ -129,7 +132,7 @@ def _build_motion(scene, scope, audio, clock_value):
 	# Gira más rápido con los medios, crece con los graves y salta en cada golpe.
 	transform = scene.create(transformTOP, 'transform')
 	transform.nodeX, transform.nodeY = 400, -300
-	transform.inputConnectors[0].connect(scope)
+	transform.inputConnectors[0].connect(scope.outputConnectors[0])
 	_expr(transform, 'rotate', '-(15 * {} + 40 * {})'.format(
 		clock_value.format('seconds'), clock_value.format('mid_phase')))
 	scale = '2 * (1 + 0.25 * {} + 0.15 * {})'.format(audio.format('low'), audio.format('beat'))
@@ -215,8 +218,10 @@ def build():
 	scene = _replace(container, baseCOMP, SCENE_NAME)
 	scene.nodeX, scene.nodeY = 0, -800
 	audio_in, clock = _build_clock(scene)
-	audio = "op('{}')['{{}}']".format(audio_in.name)
-	clock_value = "op('{}')['{{}}']".format(clock.name)
+	# Rutas completas: algunas expresiones viven dentro del vectorscopio,
+	# donde un nombre relativo no encuentra los canales.
+	audio = "op('{}')['{{}}']".format(audio_in.path)
+	clock_value = "op('{}')['{{}}']".format(clock.path)
 	scope = _build_scope(scene, audio)
 	over = _build_motion(scene, scope, audio, clock_value)
 	color = _build_color(scene, over, audio)
