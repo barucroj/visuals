@@ -16,3 +16,6 @@ assets/audio/*
 Thumbs.db
 .DS_Store
 __pycache__/
+
+# Contexto local para agentes
+agent.md
