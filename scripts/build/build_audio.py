@@ -49,12 +49,12 @@ def _build_audio(container):
 	device = audio.create(audiodeviceinCHOP, 'in_device')
 	device.nodeX, device.nodeY = 0, 0
 
-	# El código vive en el repo; el DAT solo lo refleja.
+	# El código vive en el repo; el DAT guarda una copia. No usa Sync to
+	# File: con esa opción TouchDesigner escribe de vuelta y pisa el archivo
+	# del repo (la versión 2025 le agrega un BOM al inicio).
 	code = audio.create(textDAT, 'analysis_code')
 	code.nodeX, code.nodeY = 200, -150
-	_set(code, 'file', ANALYSIS_FILE)
-	_set(code, 'syncfile', True)
-	with open(project.folder + '/' + ANALYSIS_FILE, encoding='utf-8') as source:
+	with open(project.folder + '/' + ANALYSIS_FILE, encoding='utf-8-sig') as source:
 		code.text = source.read()
 
 	analysis = audio.create(scriptCHOP, 'analysis')
