@@ -28,17 +28,26 @@ SCOPE_TOX = 'Samples/Palette/Tools/vectorScope.tox'
 # menos puntos y menos costo.
 SOURCE_RESOLUTION = (640, 360)
 
-# Degradado que colorea la nube según su densidad: negro, violeta,
-# magenta y blanco. Cada fila es pos, r, g, b, a.
+# Degradado que colorea la nube según su densidad: negro, azul profundo,
+# azul acero y blanco grisáceo. Cada fila es pos, r, g, b, a.
 RAMP_KEYS = (
 	(0.0, 0.0, 0.0, 0.0, 1.0),
-	(0.378, 0.131, 0.455, 0.703, 1.0),
-	(0.872, 0.161, 0.861, 0.383, 1.0),
-	(1.0, 1.0, 1.0, 1.0, 1.0),
+	(0.378, 0.06, 0.22, 0.55, 1.0),
+	(0.872, 0.30, 0.55, 0.80, 1.0),
+	(1.0, 0.90, 0.93, 0.95, 1.0),
 )
 
-# Cuántos grados se corre el color en cada golpe.
-BEAT_HUE_STEP = 47.0
+# Tonos que se recorren, uno por golpe, girando el azul del degradado:
+# (grados, saturación). Azul, azul verdoso, verde apagado, gris, naranja
+# y rojo; sin rosas ni amarillos.
+BEAT_TONES = (
+	(0, 1.0),
+	(-30, 1.0),
+	(-75, 0.7),
+	(0, 0.1),
+	(170, 1.0),
+	(148, 1.0),
+)
 
 
 def _warn(message):
@@ -152,7 +161,7 @@ def _build_motion(scene, scope, audio, clock_value):
 	return over
 
 
-def _build_color(scene, over, audio):
+def _build_color(scene, over):
 	ramp = scene.create(rampTOP, 'ramp')
 	ramp.nodeX, ramp.nodeY = 600, -450
 	# El Ramp TOP trae su tabla de colores acoplada; si no, se crea una.
@@ -168,12 +177,7 @@ def _build_color(scene, over, audio):
 	lookup.inputConnectors[0].connect(over)
 	lookup.inputConnectors[1].connect(ramp)
 	_set(lookup, 'channel', 'red')
-
-	hue = scene.create(hsvadjustTOP, 'hue')
-	hue.nodeX, hue.nodeY = 1000, -300
-	hue.inputConnectors[0].connect(lookup)
-	_expr(hue, 'hueoffset', '({} * {}) % 360'.format(BEAT_HUE_STEP, audio.format('beat_count')))
-	return hue
+	return lookup
 
 
 def _build_trails(scene, color, audio):
@@ -196,9 +200,19 @@ def _build_trails(scene, color, audio):
 	_expr(fade, 'opacity', '0.86 + 0.08 * {}'.format(audio.format('level')))
 	_set(feedback, 'top', fade.name)
 
+	# El tono se cambia fuera del lazo de estelas: si no, el giro se
+	# acumularía cuadro a cuadro y las estelas viejas se mezclarían con el
+	# tono nuevo en colores fuera de la paleta.
+	tone = "[{{}}][int({}) % {}]".format(audio.format('beat_count'), len(BEAT_TONES))
+	hue = scene.create(hsvadjustTOP, 'hue')
+	hue.nodeX, hue.nodeY = 1600, -300
+	hue.inputConnectors[0].connect(fade)
+	_expr(hue, 'hueoffset', tone.format(', '.join(str(t[0]) for t in BEAT_TONES)))
+	_expr(hue, 'saturationmult', tone.format(', '.join(str(t[1]) for t in BEAT_TONES)))
+
 	out = scene.create(outTOP, 'out1')
-	out.nodeX, out.nodeY = 1600, -300
-	out.inputConnectors[0].connect(fade)
+	out.nodeX, out.nodeY = 1800, -300
+	out.inputConnectors[0].connect(hue)
 	out.viewer = True
 	return out
 
@@ -224,7 +238,7 @@ def build():
 	clock_value = "op('{}')['{{}}']".format(clock.path)
 	scope = _build_scope(scene, audio)
 	over = _build_motion(scene, scope, audio, clock_value)
-	color = _build_color(scene, over, audio)
+	color = _build_color(scene, over)
 	out = _build_trails(scene, color, audio)
 
 	# Vista de la escena al nivel del proyecto.

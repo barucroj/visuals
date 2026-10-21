@@ -61,10 +61,63 @@ float fbm(vec2 p)
 	return total;
 }
 
-// Paleta por cosenos: recorre magenta, azul, cian y naranja.
+// Paleta acotada: azules, verde apagado, gris, naranja y rojo. Cada color
+// se funde con el siguiente, y el orden evita mezclas que den rosa o amarillo.
+const int PALETTE_SIZE = 7;
+const vec3 PALETTE[PALETTE_SIZE] = vec3[PALETTE_SIZE](
+	vec3(0.06, 0.22, 0.55), // azul profundo
+	vec3(0.15, 0.50, 0.70), // azul acero
+	vec3(0.15, 0.50, 0.30), // verde bosque
+	vec3(0.45, 0.48, 0.50), // gris
+	vec3(0.85, 0.38, 0.10), // naranja quemado
+	vec3(0.70, 0.08, 0.06), // rojo
+	vec3(0.12, 0.12, 0.14)  // carbón
+);
+
 vec3 palette(float t)
 {
-	return 0.5 + 0.5 * cos(TAU * (t + vec3(0.0, 0.33, 0.67)));
+	float x = fract(t) * float(PALETTE_SIZE);
+	int i = int(x);
+	float f = smoothstep(0.0, 1.0, fract(x));
+	return mix(PALETTE[i], PALETTE[(i + 1) % PALETTE_SIZE], f);
+}
+
+vec3 rgb2hsv(vec3 c)
+{
+	vec4 k = vec4(0.0, -1.0 / 3.0, 2.0 / 3.0, -1.0);
+	vec4 p = mix(vec4(c.bg, k.wz), vec4(c.gb, k.xy), step(c.b, c.g));
+	vec4 q = mix(vec4(p.xyw, c.r), vec4(c.r, p.yzx), step(p.x, c.r));
+	float d = q.x - min(q.w, q.y);
+	return vec3(abs(q.z + (q.w - q.y) / (6.0 * d + 1e-10)), d / (q.x + 1e-10), q.x);
+}
+
+vec3 hsv2rgb(vec3 c)
+{
+	vec3 p = abs(fract(c.xxx + vec3(1.0, 2.0 / 3.0, 1.0 / 3.0)) * 6.0 - 3.0);
+	return c.z * mix(vec3(1.0), clamp(p - 1.0, 0.0, 1.0), c.y);
+}
+
+// Las capas se suman y pueden mezclarse en tonos fuera de la paleta: esto
+// lleva amarillos y lima al naranja o al verde, violetas y rosas al azul o
+// al rojo, apaga los verdes chillones y vuelve gris el rojo pálido.
+vec3 limitHue(vec3 color)
+{
+	vec3 hsv = rgb2hsv(color);
+	float h = hsv.x * 360.0;
+	if (h > 35.0 && h < 62.5)
+		h = 35.0;
+	else if (h >= 62.5 && h < 90.0)
+		h = 90.0;
+	else if (h > 250.0 && h < 305.0)
+		h = 250.0;
+	else if (h >= 305.0)
+		h = 0.0;
+	if (h >= 75.0 && h <= 165.0)
+		hsv.y = min(hsv.y, 0.6);
+	if (h <= 35.0)
+		hsv.y *= smoothstep(0.25, 0.55, hsv.y);
+	hsv.x = h / 360.0;
+	return hsv2rgb(hsv);
 }
 
 // Pliega el plano en gajos iguales reflejados alrededor del centro.
@@ -112,7 +165,7 @@ void main()
 
 	// Anillos que salen del centro al ritmo de los graves.
 	float rings = 0.5 + 0.5 * cos(TAU * (3.5 * radius - 1.5 * lowPhase));
-	color += palette(hue + 0.5 + radius - 0.2 * lowPhase) * pow(rings, 8.0) * low;
+	color += palette(hue + 0.15 + 0.3 * radius - 0.2 * lowPhase) * pow(rings, 8.0) * low;
 
 	// Chispas que parpadean con los agudos.
 	vec2 spark = floor(folded * 42.0);
@@ -124,6 +177,11 @@ void main()
 	color += palette(hue + 0.05 * seconds) * core / (radius * radius + 0.02);
 
 	color *= smoothstep(1.1, 0.25, radius);
+
+	// Si se pasa de 1, se escala entero en vez de recortar cada canal: así
+	// el naranja saturado no se corre hacia el amarillo.
+	color /= max(max(max(color.r, color.g), color.b), 1.0);
+	color = limitHue(color);
 
 	// Estelas: el frame anterior se aleja del centro y se apaga de a poco.
 	vec2 trailUV = 0.5 + rotate(0.004) * centered * (1.0 - TRAIL_ZOOM - 0.03 * low);
