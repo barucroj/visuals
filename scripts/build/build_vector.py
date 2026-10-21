@@ -1,9 +1,12 @@
 """Arma la escena vector dentro del proyecto abierto.
 
-Un vectorscopio dibuja cada píxel de la salida del caleidoscopio según su
-tono y saturación, y el audio mueve el giro, la escala, el color y las
-estelas. Necesita la red de audio y la escena caleidoscopio. Uso, en el
-Textport (Alt+T):
+Un vectorscopio dibuja cada píxel de su entrada según su tono y saturación.
+La entrada pone lado a lado una foto multicolor, que da rayos hacia todos
+lados en forma de estrella, y la salida del caleidoscopio, que da los hilos.
+El brillo del caleidoscopio también enmascara la foto para que los rayos
+crezcan y se encojan con él. El audio alarga los rayos, mueve el giro, la
+escala y las estelas, y hace avanzar el color por la paleta. Necesita la
+red de audio y la escena caleidoscopio. Uso, en el Textport (Alt+T):
 
 exec(open(project.folder + '/../scripts/build/build_vector.py', encoding='utf-8').read(), globals())
 
@@ -13,6 +16,8 @@ Se puede volver a ejecutar: reemplaza la escena anterior.
 import os
 
 CLOCK_FILE = '../scripts/audio/audio_clock.py'
+WANDER_FILE = '../scripts/audio/audio_wander.py'
+SHADER_FILE = '../shaders/scenes/vector_tint.glsl'
 AUDIO_NAME = 'audio'
 SOURCE_SCENE = 'caleidoscopio'
 SCENE_NAME = 'vector'
@@ -24,30 +29,37 @@ PIXEL_FORMAT = 'rgba16float'
 # instalación de TouchDesigner en vez de copiarlo al repo.
 SCOPE_TOX = 'Samples/Palette/Tools/vectorScope.tox'
 
+# Foto de gomitas de muchos colores, de los ejemplos de TouchDesigner: da
+# un rayo por cada tono. Es la misma que usa el ejemplo del vectorscopio.
+SOURCE_IMAGE = 'Map/Jellybeans.1.jpg'
+
 # Cada píxel de la imagen analizada es un punto: a menor resolución,
 # menos puntos y menos costo.
 SOURCE_RESOLUTION = (640, 360)
 
-# Degradado que colorea la nube según su densidad: negro, azul profundo,
-# azul acero y blanco grisáceo. Cada fila es pos, r, g, b, a.
+# En el vectorscopio el tono de un píxel es su ángulo, así que girar el
+# tono de un grupo de píxeles gira sus brazos. La foto se parte en tercios
+# y cada tercio, igual que el caleidoscopio, gira con el ángulo errante de
+# una banda.
+IMAGE_BANDS = ('low_angle', 'mid_angle', 'high_angle')
+KALEIDO_BAND = 'level_angle'
+
+# Cuadrícula de 2 x 2 con los cuatro grupos que entra al vectorscopio.
+LAYOUT_RESOLUTION = (1280, 480)
+
+# Degradado que marca la densidad de la nube, en gris: el color se pone
+# después, fuera del lazo de estelas. Cada fila es pos, r, g, b, a.
 RAMP_KEYS = (
 	(0.0, 0.0, 0.0, 0.0, 1.0),
-	(0.378, 0.06, 0.22, 0.55, 1.0),
-	(0.872, 0.30, 0.55, 0.80, 1.0),
-	(1.0, 0.90, 0.93, 0.95, 1.0),
+	(0.378, 0.3, 0.3, 0.3, 1.0),
+	(0.872, 0.8, 0.8, 0.8, 1.0),
+	(1.0, 1.0, 1.0, 1.0, 1.0),
 )
 
-# Tonos que se recorren, uno por golpe, girando el azul del degradado:
-# (grados, saturación). Azul, azul verdoso, verde apagado, gris, naranja
-# y rojo; sin rosas ni amarillos.
-BEAT_TONES = (
-	(0, 1.0),
-	(-30, 1.0),
-	(-75, 0.7),
-	(0, 0.1),
-	(170, 1.0),
-	(148, 1.0),
-)
+# Vueltas por segundo a la paleta: una base constante y lo que suma el reloj
+# de graves, que corre más rápido cuanto más fuertes suenan.
+PALETTE_SPEED = 0.025
+PALETTE_LOW_SPEED = 0.06
 
 
 def _warn(message):
@@ -96,6 +108,13 @@ def _resolution(top, size=RESOLUTION):
 	_set(top, 'format', PIXEL_FORMAT)
 
 
+def _uniform(glsl, index, name, expressions):
+	prefix = 'vec{}'.format(index)
+	_set(glsl, prefix + 'name', name)
+	for axis, expression in zip('xyzw', expressions):
+		_expr(glsl, prefix + 'value' + axis, expression)
+
+
 def _build_clock(scene):
 	audio_in = scene.create(selectCHOP, 'audio_in')
 	audio_in.nodeX, audio_in.nodeY = 0, 0
@@ -110,14 +129,92 @@ def _build_clock(scene):
 		docked.destroy()
 	_set(clock, 'callbacks', code.name)
 	clock.inputConnectors[0].connect(audio_in)
-	return audio_in, clock
+
+	wander_code = _file_dat(scene, 'wander_code', WANDER_FILE)
+	wander_code.nodeX, wander_code.nodeY = 400, -150
+
+	wander = scene.create(scriptCHOP, 'wander')
+	wander.nodeX, wander.nodeY = 400, 0
+	for docked in list(wander.docked):
+		docked.destroy()
+	_set(wander, 'callbacks', wander_code.name)
+	wander.inputConnectors[0].connect(audio_in)
+	return audio_in, clock, wander
 
 
-def _build_scope(scene, audio):
-	source = scene.create(selectTOP, 'source')
-	source.nodeX, source.nodeY = 0, -300
-	_set(source, 'top', '../{}/out1'.format(SOURCE_SCENE))
-	_resolution(source, SOURCE_RESOLUTION)
+def _hue(scene, name, source, angle, position):
+	hue = scene.create(hsvadjustTOP, name)
+	hue.nodeX, hue.nodeY = position
+	hue.inputConnectors[0].connect(source)
+	_expr(hue, 'hueoffset', angle)
+	return hue
+
+
+def _build_source(scene, audio, wander_value):
+	image = scene.create(moviefileinTOP, 'image')
+	image.nodeX, image.nodeY = -1400, -300
+	_expr(image, 'file', "app.samplesFolder + '/{}'".format(SOURCE_IMAGE))
+	_resolution(image, SOURCE_RESOLUTION)
+
+	# Más saturación aleja los puntos del centro: los rayos crecen con los
+	# graves y saltan en cada golpe.
+	pulse = scene.create(hsvadjustTOP, 'pulse')
+	pulse.nodeX, pulse.nodeY = -1200, -300
+	pulse.inputConnectors[0].connect(image)
+	_expr(pulse, 'saturationmult', '1.0 + 0.8 * {} + 0.4 * {}'.format(
+		audio.format('low'), audio.format('beat')))
+
+	kaleido = scene.create(selectTOP, 'kaleido')
+	kaleido.nodeX, kaleido.nodeY = -1400, -150
+	_set(kaleido, 'top', '../{}/out1'.format(SOURCE_SCENE))
+	_resolution(kaleido, SOURCE_RESOLUTION)
+
+	# Máscara gris para no teñir la foto. Un piso evita que la estrella se
+	# junte en el centro cuando el caleidoscopio se oscurece.
+	mono = scene.create(monochromeTOP, 'mono')
+	mono.nodeX, mono.nodeY = -1200, -150
+	mono.inputConnectors[0].connect(kaleido)
+	boost = scene.create(levelTOP, 'boost')
+	boost.nodeX, boost.nodeY = -1000, -150
+	boost.inputConnectors[0].connect(mono)
+	_set(boost, 'brightness1', 1.6)
+	_set(boost, 'outlow', 0.5)
+
+	mask = scene.create(compositeTOP, 'mask')
+	mask.nodeX, mask.nodeY = -1000, -300
+	mask.inputConnectors[0].connect(pulse)
+	mask.inputConnectors[1].connect(boost)
+	_set(mask, 'operand', 'multiply')
+
+	parts = []
+	count = len(IMAGE_BANDS)
+	for index, band in enumerate(IMAGE_BANDS):
+		crop = scene.create(cropTOP, 'crop{}'.format(index + 1))
+		crop.nodeX, crop.nodeY = -800, -300 - 150 * index
+		crop.inputConnectors[0].connect(mask)
+		_set(crop, 'cropleft', index / count)
+		_set(crop, 'cropright', (index + 1) / count)
+		parts.append(_hue(scene, 'hue{}'.format(index + 1), crop,
+			wander_value.format(band), (-600, -300 - 150 * index)))
+	parts.append(_hue(scene, 'hue_kaleido', kaleido,
+		wander_value.format(KALEIDO_BAND), (-600, -150)))
+
+	# El vectorscopio no mira dónde está cada píxel, así que las imágenes
+	# se acomodan en una cuadrícula en vez de sumarse: sumadas, sus colores
+	# se mezclarían y la nube se juntaría en el centro. Cada celda tiene el
+	# mismo tamaño para que cada grupo aporte los mismos puntos.
+	source = scene.create(layoutTOP, 'source')
+	source.nodeX, source.nodeY = -200, -300
+	for index, part in enumerate(parts):
+		source.inputConnectors[index].connect(part)
+	_set(source, 'align', 'gridrows')
+	_set(source, 'maxcols', 2)
+	_set(source, 'fit', 'fill')
+	_resolution(source, LAYOUT_RESOLUTION)
+	return source
+
+
+def _build_scope(scene, source, audio):
 
 	# El .tox de la Palette envuelve el vectorscopio en un Base COMP con su
 	# ícono; se copia el componente de adentro y se descarta el envoltorio.
@@ -131,9 +228,10 @@ def _build_scope(scene, audio):
 	_set(scope, 'Targetlevel', 0.567)
 	_set(scope, 'Huedelta', 0.0368)
 	_set(scope, 'Satdelta', 0.1812)
-	# Los puntos se ven más con el volumen y la imagen brilla con los agudos.
+	# La retícula queda tenue y fija para que no domine sobre la estrella.
+	_set(scope, 'Displaybrightness', 0.414)
+	# Los puntos se ven más con el volumen.
 	_expr(scope, 'Outputgain', '0.08 + 0.12 * {}'.format(audio.format('level')))
-	_expr(scope, 'Displaybrightness', '0.35 + 0.4 * {}'.format(audio.format('high')))
 	return scope
 
 
@@ -142,9 +240,9 @@ def _build_motion(scene, scope, audio, clock_value):
 	transform = scene.create(transformTOP, 'transform')
 	transform.nodeX, transform.nodeY = 400, -300
 	transform.inputConnectors[0].connect(scope.outputConnectors[0])
-	_expr(transform, 'rotate', '-(15 * {} + 40 * {})'.format(
+	_expr(transform, 'rotate', '-(25 * {} + 30 * {})'.format(
 		clock_value.format('seconds'), clock_value.format('mid_phase')))
-	scale = '2 * (1 + 0.25 * {} + 0.15 * {})'.format(audio.format('low'), audio.format('beat'))
+	scale = '2.4 * (1 + 0.2 * {} + 0.1 * {})'.format(audio.format('low'), audio.format('beat'))
 	_expr(transform, 'sx', scale)
 	_expr(transform, 'sy', scale)
 
@@ -161,7 +259,7 @@ def _build_motion(scene, scope, audio, clock_value):
 	return over
 
 
-def _build_color(scene, over):
+def _build_density(scene, over):
 	ramp = scene.create(rampTOP, 'ramp')
 	ramp.nodeX, ramp.nodeY = 600, -450
 	# El Ramp TOP trae su tabla de colores acoplada; si no, se crea una.
@@ -180,15 +278,15 @@ def _build_color(scene, over):
 	return lookup
 
 
-def _build_trails(scene, color, audio):
+def _build_trails(scene, density, audio):
 	feedback = scene.create(feedbackTOP, 'feedback')
 	feedback.nodeX, feedback.nodeY = 1200, -450
-	feedback.inputConnectors[0].connect(color)
+	feedback.inputConnectors[0].connect(density)
 
 	comp = scene.create(compositeTOP, 'comp')
 	comp.nodeX, comp.nodeY = 1200, -300
 	comp.inputConnectors[0].connect(feedback)
-	comp.inputConnectors[1].connect(color)
+	comp.inputConnectors[1].connect(density)
 	_set(comp, 'operand', 'screen')
 	_resolution(comp)
 
@@ -199,20 +297,30 @@ def _build_trails(scene, color, audio):
 	_set(fade, 'inlow', 0.022)
 	_expr(fade, 'opacity', '0.86 + 0.08 * {}'.format(audio.format('level')))
 	_set(feedback, 'top', fade.name)
+	return fade
 
-	# El tono se cambia fuera del lazo de estelas: si no, el giro se
-	# acumularía cuadro a cuadro y las estelas viejas se mezclarían con el
-	# tono nuevo en colores fuera de la paleta.
-	tone = "[{{}}][int({}) % {}]".format(audio.format('beat_count'), len(BEAT_TONES))
-	hue = scene.create(hsvadjustTOP, 'hue')
-	hue.nodeX, hue.nodeY = 1600, -300
-	hue.inputConnectors[0].connect(fade)
-	_expr(hue, 'hueoffset', tone.format(', '.join(str(t[0]) for t in BEAT_TONES)))
-	_expr(hue, 'saturationmult', tone.format(', '.join(str(t[1]) for t in BEAT_TONES)))
+
+def _build_tint(scene, trails, audio, clock_value):
+	# El color se pone fuera del lazo de estelas: así las estelas viejas
+	# cambian de tono junto con la nueva y no se mezclan en otros colores.
+	code = _file_dat(scene, 'tint_code', SHADER_FILE)
+	code.nodeX, code.nodeY = 1600, -450
+
+	tint = scene.create(glslTOP, 'tint')
+	tint.nodeX, tint.nodeY = 1600, -300
+	for docked in list(tint.docked):
+		docked.destroy()
+	_set(tint, 'pixeldat', code.name)
+	_resolution(tint)
+	tint.inputConnectors[0].connect(trails)
+	phase = '{} * {} + {} * {}'.format(
+		PALETTE_SPEED, clock_value.format('seconds'),
+		PALETTE_LOW_SPEED, clock_value.format('low_phase'))
+	_uniform(tint, 0, 'uPhase', [phase, audio.format('beat')])
 
 	out = scene.create(outTOP, 'out1')
 	out.nodeX, out.nodeY = 1800, -300
-	out.inputConnectors[0].connect(hue)
+	out.inputConnectors[0].connect(tint)
 	out.viewer = True
 	return out
 
@@ -228,18 +336,24 @@ def build():
 	if not os.path.isfile(app.installFolder + '/' + SCOPE_TOX):
 		_warn('no se encontro {} en la instalacion de TouchDesigner'.format(SCOPE_TOX))
 		return
+	if not os.path.isfile(app.samplesFolder + '/' + SOURCE_IMAGE):
+		_warn('no se encontro {} en los ejemplos de TouchDesigner'.format(SOURCE_IMAGE))
+		return
 
 	scene = _replace(container, baseCOMP, SCENE_NAME)
 	scene.nodeX, scene.nodeY = 0, -800
-	audio_in, clock = _build_clock(scene)
+	audio_in, clock, wander = _build_clock(scene)
 	# Rutas completas: algunas expresiones viven dentro del vectorscopio,
 	# donde un nombre relativo no encuentra los canales.
 	audio = "op('{}')['{{}}']".format(audio_in.path)
 	clock_value = "op('{}')['{{}}']".format(clock.path)
-	scope = _build_scope(scene, audio)
+	wander_value = "op('{}')['{{}}']".format(wander.path)
+	source = _build_source(scene, audio, wander_value)
+	scope = _build_scope(scene, source, audio)
 	over = _build_motion(scene, scope, audio, clock_value)
-	color = _build_color(scene, over)
-	out = _build_trails(scene, color, audio)
+	density = _build_density(scene, over)
+	trails = _build_trails(scene, density, audio)
+	out = _build_tint(scene, trails, audio, clock_value)
 
 	# Vista de la escena al nivel del proyecto.
 	view = _replace(container, selectTOP, VIEW_NAME)
