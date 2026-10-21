@@ -229,7 +229,10 @@ def _build_scope(scene, source, audio):
 	_set(scope, 'Huedelta', 0.0368)
 	_set(scope, 'Satdelta', 0.1812)
 	# La retícula queda tenue y fija para que no domine sobre la estrella.
-	_set(scope, 'Displaybrightness', 0.414)
+	# El vectorScope 2 de TouchDesigner 2025 ya no dibuja retícula ni tiene
+	# este parámetro.
+	if hasattr(scope.par, 'Displaybrightness'):
+		_set(scope, 'Displaybrightness', 0.414)
 	# Los puntos se ven más con el volumen.
 	_expr(scope, 'Outputgain', '0.08 + 0.12 * {}'.format(audio.format('level')))
 	return scope
